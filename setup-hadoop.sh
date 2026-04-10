@@ -1,28 +1,37 @@
 #!/bin/bash
 
-echo "🚀 Starting Hadoop Setup..."
+echo "🚀 Starting FULL Hadoop Setup..."
 
-# STEP 1: Install Java 8
+# Ask for sudo upfront
+sudo -v || exit 1
+
+# STEP 1: Install dependencies
 sudo apt update -y
-sudo apt install -y openjdk-8-jdk ssh
+sudo apt install -y openjdk-8-jdk ssh wget
 
-# Force Java 8 as default
+# STEP 2: Force Java 8
 sudo update-alternatives --set java /usr/lib/jvm/java-8-openjdk-amd64/jre/bin/java
 sudo update-alternatives --set javac /usr/lib/jvm/java-8-openjdk-amd64/bin/javac
 
-# Verify Java
+echo "✅ Java version:"
 java -version
 
-# STEP 2: Create Hadoop user (if not exists)
-id -u hadoop &>/dev/null || sudo adduser --disabled-password --gecos "" hadoop
-echo "hadoop:hadoop" | sudo chpasswd
+# STEP 3: Create Hadoop user if not exists
+if id "hadoop" &>/dev/null; then
+    echo "👤 Hadoop user already exists"
+else
+    sudo adduser --disabled-password --gecos "" hadoop
+    echo "hadoop:hadoop" | sudo chpasswd
+fi
 
-# STEP 3: Run setup as Hadoop user
+# STEP 4: Execute as Hadoop user
 sudo -u hadoop bash << 'EOF'
 
-echo "👤 Switched to Hadoop user"
+echo "👤 Running as Hadoop user"
 
-# Setup SSH
+cd ~
+
+# STEP 5: Setup SSH
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
 
@@ -32,30 +41,33 @@ chmod 600 ~/.ssh/authorized_keys
 
 ssh -o StrictHostKeyChecking=no localhost "echo SSH OK"
 
-# Download Hadoop
-cd ~
-wget -q https://dlcdn.apache.org/hadoop/common/hadoop-3.3.6/hadoop-3.3.6.tar.gz
+# STEP 6: Download Hadoop (if not exists)
+if [ ! -d "$HOME/hadoop" ]; then
+    wget -q https://dlcdn.apache.org/hadoop/common/hadoop-3.3.6/hadoop-3.3.6.tar.gz
+    tar -xzf hadoop-3.3.6.tar.gz
+    mv hadoop-3.3.6 hadoop
+fi
 
-tar -xzf hadoop-3.3.6.tar.gz
-mv hadoop-3.3.6 hadoop
-
-# Environment variables
+# STEP 7: Set environment variables
 cat <<EOT >> ~/.bashrc
 export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
 export HADOOP_HOME=/home/hadoop/hadoop
 export PATH=\$PATH:\$HADOOP_HOME/bin:\$HADOOP_HOME/sbin
 EOT
 
-source ~/.bashrc
+export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+export HADOOP_HOME=/home/hadoop/hadoop
+export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin
 
-# Configure JAVA_HOME in Hadoop
+# STEP 8: Fix JAVA_HOME inside Hadoop
 sed -i 's|export JAVA_HOME=.*|export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64|' $HADOOP_HOME/etc/hadoop/hadoop-env.sh
 
-# Hadoop directories
+# STEP 9: Create directories
 mkdir -p ~/hadoopdata/hdfs/namenode
 mkdir -p ~/hadoopdata/hdfs/datanode
 
-# core-site.xml
+# STEP 10: Config files
+
 cat <<EOT > $HADOOP_HOME/etc/hadoop/core-site.xml
 <configuration>
 <property>
@@ -65,7 +77,6 @@ cat <<EOT > $HADOOP_HOME/etc/hadoop/core-site.xml
 </configuration>
 EOT
 
-# hdfs-site.xml
 cat <<EOT > $HADOOP_HOME/etc/hadoop/hdfs-site.xml
 <configuration>
 <property>
@@ -83,7 +94,6 @@ cat <<EOT > $HADOOP_HOME/etc/hadoop/hdfs-site.xml
 </configuration>
 EOT
 
-# mapred-site.xml
 cp $HADOOP_HOME/etc/hadoop/mapred-site.xml.template $HADOOP_HOME/etc/hadoop/mapred-site.xml
 
 cat <<EOT > $HADOOP_HOME/etc/hadoop/mapred-site.xml
@@ -95,7 +105,6 @@ cat <<EOT > $HADOOP_HOME/etc/hadoop/mapred-site.xml
 </configuration>
 EOT
 
-# yarn-site.xml
 cat <<EOT > $HADOOP_HOME/etc/hadoop/yarn-site.xml
 <configuration>
 <property>
@@ -105,29 +114,25 @@ cat <<EOT > $HADOOP_HOME/etc/hadoop/yarn-site.xml
 </configuration>
 EOT
 
-# Format Namenode (only if not already formatted)
+# STEP 11: Format namenode (only first time)
 if [ ! -d "/home/hadoop/hadoopdata/hdfs/namenode/current" ]; then
     hdfs namenode -format
 fi
 
-# Start Hadoop
-start-dfs.sh
-start-yarn.sh
+# STEP 12: Start Hadoop
+$HADOOP_HOME/sbin/start-dfs.sh
+$HADOOP_HOME/sbin/start-yarn.sh
 
 sleep 5
 
-echo "📊 Checking running services..."
-jps
-
-# Auto-fix if SecondaryNameNode missing
+# STEP 13: Ensure all 5 daemons
 if ! jps | grep -q SecondaryNameNode; then
-    echo "⚠️ Starting SecondaryNameNode manually..."
-    hadoop-daemon.sh start secondarynamenode
+    $HADOOP_HOME/sbin/hadoop-daemon.sh start secondarynamenode
 fi
 
 sleep 3
 
-echo "✅ FINAL JPS OUTPUT:"
+echo "🎯 FINAL JPS OUTPUT:"
 jps
 
 echo "🌐 Namenode UI: http://localhost:9870"
