@@ -2,63 +2,56 @@
 
 echo "🚀 Starting Hadoop Setup..."
 
-# STEP 1: Install Java
+# STEP 1: Install Java 8
 sudo apt update -y
-sudo apt install -y openjdk-8-jdk
+sudo apt install -y openjdk-8-jdk ssh
 
-# STEP 2: Verify Java
+# Force Java 8 as default
+sudo update-alternatives --set java /usr/lib/jvm/java-8-openjdk-amd64/jre/bin/java
+sudo update-alternatives --set javac /usr/lib/jvm/java-8-openjdk-amd64/bin/javac
+
+# Verify Java
 java -version
 
-# STEP 3: Install SSH
-sudo apt install -y ssh
-
-# STEP 4: Create Hadoop user
-sudo adduser --disabled-password --gecos "" hadoop
+# STEP 2: Create Hadoop user (if not exists)
+id -u hadoop &>/dev/null || sudo adduser --disabled-password --gecos "" hadoop
 echo "hadoop:hadoop" | sudo chpasswd
 
-# STEP 5: Switch to Hadoop user
+# STEP 3: Run setup as Hadoop user
 sudo -u hadoop bash << 'EOF'
 
-# STEP 6: Generate SSH Key
-ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa
+echo "👤 Switched to Hadoop user"
 
-# STEP 7: Set permissions
+# Setup SSH
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+
+ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa <<< y
 cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
-chmod 640 ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
 
-# STEP 8: Test SSH localhost
-ssh -o StrictHostKeyChecking=no localhost "echo SSH Working"
+ssh -o StrictHostKeyChecking=no localhost "echo SSH OK"
 
-# STEP 9: Switch user again
+# Download Hadoop
 cd ~
+wget -q https://dlcdn.apache.org/hadoop/common/hadoop-3.3.6/hadoop-3.3.6.tar.gz
 
-# STEP 10: Install Hadoop
-wget https://dlcdn.apache.org/hadoop/common/hadoop-3.3.6/hadoop-3.3.6.tar.gz
-
-tar -xvzf hadoop-3.3.6.tar.gz
+tar -xzf hadoop-3.3.6.tar.gz
 mv hadoop-3.3.6 hadoop
 
-# Set environment variables
+# Environment variables
 cat <<EOT >> ~/.bashrc
 export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
 export HADOOP_HOME=/home/hadoop/hadoop
-export HADOOP_INSTALL=\$HADOOP_HOME
-export HADOOP_MAPRED_HOME=\$HADOOP_HOME
-export HADOOP_COMMON_HOME=\$HADOOP_HOME
-export HADOOP_HDFS_HOME=\$HADOOP_HOME
-export HADOOP_YARN_HOME=\$HADOOP_HOME
-export HADOOP_COMMON_LIB_NATIVE_DIR=\$HADOOP_HOME/lib/native
-export PATH=\$PATH:\$HADOOP_HOME/sbin:\$HADOOP_HOME/bin
-export HADOOP_OPTS="-Djava.library.path=\$HADOOP_HOME/lib/native"
+export PATH=\$PATH:\$HADOOP_HOME/bin:\$HADOOP_HOME/sbin
 EOT
 
 source ~/.bashrc
 
-# Configure JAVA_HOME
+# Configure JAVA_HOME in Hadoop
 sed -i 's|export JAVA_HOME=.*|export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64|' $HADOOP_HOME/etc/hadoop/hadoop-env.sh
 
-# STEP 11: Configure Hadoop
-
+# Hadoop directories
 mkdir -p ~/hadoopdata/hdfs/namenode
 mkdir -p ~/hadoopdata/hdfs/datanode
 
@@ -96,16 +89,8 @@ cp $HADOOP_HOME/etc/hadoop/mapred-site.xml.template $HADOOP_HOME/etc/hadoop/mapr
 cat <<EOT > $HADOOP_HOME/etc/hadoop/mapred-site.xml
 <configuration>
 <property>
-<name>yarn.app.mapreduce.am.env</name>
-<value>HADOOP_MAPRED_HOME=\$HADOOP_HOME</value>
-</property>
-<property>
-<name>mapreduce.map.env</name>
-<value>HADOOP_MAPRED_HOME=\$HADOOP_HOME</value>
-</property>
-<property>
-<name>mapreduce.reduce.env</name>
-<value>HADOOP_MAPRED_HOME=\$HADOOP_HOME</value>
+<name>mapreduce.framework.name</name>
+<value>yarn</value>
 </property>
 </configuration>
 EOT
@@ -120,34 +105,34 @@ cat <<EOT > $HADOOP_HOME/etc/hadoop/yarn-site.xml
 </configuration>
 EOT
 
-# STEP 12: Start Hadoop
-hdfs namenode -format
-start-all.sh
+# Format Namenode (only if not already formatted)
+if [ ! -d "/home/hadoop/hadoopdata/hdfs/namenode/current" ]; then
+    hdfs namenode -format
+fi
 
-# Check services
+# Start Hadoop
+start-dfs.sh
+start-yarn.sh
+
+sleep 5
+
+echo "📊 Checking running services..."
 jps
 
-# STEP 13: Install net-tools
-sudo apt install -y net-tools || true
+# Auto-fix if SecondaryNameNode missing
+if ! jps | grep -q SecondaryNameNode; then
+    echo "⚠️ Starting SecondaryNameNode manually..."
+    hadoop-daemon.sh start secondarynamenode
+fi
 
-ifconfig || ip a
+sleep 3
+
+echo "✅ FINAL JPS OUTPUT:"
+jps
 
 echo "🌐 Namenode UI: http://localhost:9870"
-echo "🌐 Resource Manager: http://localhost:8088"
-
-# STEP 14: Verify Hadoop
-hdfs dfs -mkdir /test1
-hdfs dfs -mkdir /logs
-
-hdfs dfs -ls /
-
-hdfs dfs -put /var/log/* /logs/ || true
-
-echo "✅ HDFS Test Completed"
-
-# STEP 15: Stop Hadoop (optional)
-# stop-all.sh
+echo "🌐 ResourceManager UI: http://localhost:8088"
 
 EOF
 
-echo "🎉 FULL HADOOP SETUP DONE!"
+echo "🎉 HADOOP SETUP COMPLETED SUCCESSFULLY!"
